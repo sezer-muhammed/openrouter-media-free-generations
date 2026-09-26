@@ -8,7 +8,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -61,6 +61,72 @@ def _request(path: str, api_token: str, payload: dict[str, Any] | None = None) -
     return result
 
 
+def _stream_request(
+    path: str,
+    api_token: str,
+    payload: dict[str, Any],
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Read OpenRouter image SSE and return the completed images in buffered shape."""
+    request = Request(
+        _BASE_URL + path,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_token}",
+            "Accept": "text/event-stream",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    images: list[dict[str, Any]] = []
+    usage: dict[str, Any] = {}
+    try:
+        with urlopen(request, timeout=180) as response:
+            data_lines: list[str] = []
+            for raw_line in response:
+                line = raw_line.decode("utf-8").rstrip("\r\n")
+                if line.startswith("data:"):
+                    data_lines.append(line[5:].lstrip())
+                elif not line and data_lines:
+                    event_data = "\n".join(data_lines)
+                    data_lines.clear()
+                    if event_data == "[DONE]":
+                        break
+                    event = json.loads(event_data)
+                    event_type = event.get("type")
+                    if event_type == "error":
+                        error = event.get("error") or {}
+                        message = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+                        raise OpenRouterError(f"OpenRouter stream error: {message}")
+                    if event_type == "image_generation.completed":
+                        images.append({"b64_json": event["b64_json"], "media_type": event.get("media_type")})
+                        usage = event.get("usage") or usage
+                    if on_event:
+                        on_event({key: value for key, value in event.items() if key != "b64_json"})
+            if data_lines:
+                event_data = "\n".join(data_lines)
+                if event_data != "[DONE]":
+                    event = json.loads(event_data)
+                    if event.get("type") == "image_generation.completed":
+                        images.append({"b64_json": event["b64_json"], "media_type": event.get("media_type")})
+                        usage = event.get("usage") or usage
+                    elif event.get("type") == "error":
+                        error = event.get("error") or {}
+                        raise OpenRouterError(f"OpenRouter stream error: {error}")
+                    if on_event:
+                        on_event({key: value for key, value in event.items() if key != "b64_json"})
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise OpenRouterError(f"OpenRouter HTTP {exc.code}: {detail}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise OpenRouterError(f"OpenRouter stream failed: {exc}") from exc
+    except (ValueError, UnicodeDecodeError, KeyError, TypeError) as exc:
+        raise OpenRouterError("OpenRouter returned malformed SSE data") from exc
+    if not images:
+        raise OpenRouterError("OpenRouter stream ended without a completed image")
+    return {"data": images, "usage": usage}
+
+
 def _token(api_token: str | None) -> str:
     token = api_token or os.environ.get("OPENROUTER_API_KEY")
     if not token:
@@ -76,8 +142,8 @@ class GeneratedImage:
     def save(self, path: str | Path) -> Path:
         """Save bytes without converting the image format; add an extension if absent."""
         destination = Path(path)
-        if not destination.suffix:
-            destination = destination.with_suffix(_EXTENSIONS.get(self.media_type, ".bin"))
+        if destination.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".svg", ".bin"}:
+            destination = destination.with_name(destination.name + _EXTENSIONS.get(self.media_type, ".bin"))
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(self.data)
         return destination
@@ -104,18 +170,24 @@ class ImageGenerator:
         self.model_parameters = model_parameters
         self.last_result: GeneratedImages | None = None
 
-    def generate(self, prompt: str, **parameters: Any) -> GeneratedImages:
+    def generate(
+        self,
+        prompt: str,
+        *,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+        **parameters: Any,
+    ) -> GeneratedImages:
         """Generate image(s). Per-call parameters override constructor parameters."""
         if not prompt:
             raise ValueError("prompt must not be empty")
         options = {**self.model_parameters, **parameters}
         if "model" in options or "prompt" in options:
             raise ValueError("model and prompt must be passed as their own arguments")
-        if options.get("stream"):
-            raise ValueError("stream=True is not supported by this simple client")
-        response = _request(
-            "/api/v1/images", self.api_token,
-            {"model": self.model_name, "prompt": prompt, **options},
+        payload = {"model": self.model_name, "prompt": prompt, **options}
+        response = (
+            _stream_request("/api/v1/images", self.api_token, payload, on_event)
+            if options.get("stream")
+            else _request("/api/v1/images", self.api_token, payload)
         )
         try:
             images = tuple(

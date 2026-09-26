@@ -2,6 +2,7 @@ import base64
 import json
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,6 +28,9 @@ class ClientTests(unittest.TestCase):
             path = generator.save(Path(directory) / "cat")
             self.assertEqual(path.suffix, ".png")
             self.assertEqual(path.read_bytes(), image_bytes)
+            dotted = generator.save(Path(directory) / "model-v0.1-result")
+            self.assertEqual(dotted.suffix, ".png")
+            self.assertEqual(dotted.name, "model-v0.1-result.png")
 
     def test_generate_rejects_empty_or_malformed_images(self):
         generator = ImageGenerator("example/model", "test-key")
@@ -50,6 +54,29 @@ class ClientTests(unittest.TestCase):
                 result = json.loads(path.read_text())
                 self.assertEqual(result["data"][0]["endpoint_details"], details)
                 self.assertEqual(request.call_count, 2)
+
+    def test_streaming_collects_final_image_and_progress_events(self):
+        image_bytes = b"image-data"
+        final = {
+            "type": "image_generation.completed",
+            "b64_json": base64.b64encode(image_bytes).decode(),
+            "media_type": "image/webp",
+            "usage": {"cost": 0.01},
+        }
+        stream = (
+            'data: {"type":"image_generation.partial_image","partial_image_index":0,"b64_json":"preview"}\n\n'
+            + "data: " + json.dumps(final) + "\n\n"
+            + "data: [DONE]\n\n"
+        ).encode()
+        seen = []
+        with patch("openrouter_media_free_generations.client.urlopen", return_value=BytesIO(stream)) as open_url:
+            result = ImageGenerator("example/model", "test-key").generate("A cat", stream=True, on_event=seen.append)
+        self.assertEqual(result.images[0].data, image_bytes)
+        self.assertEqual(result.images[0].media_type, "image/webp")
+        self.assertEqual(result.usage["cost"], 0.01)
+        self.assertEqual([event["type"] for event in seen], ["image_generation.partial_image", "image_generation.completed"])
+        self.assertTrue(all("b64_json" not in event for event in seen))
+        self.assertTrue(json.loads(open_url.call_args.args[0].data)["stream"])
 
 
 if __name__ == "__main__":

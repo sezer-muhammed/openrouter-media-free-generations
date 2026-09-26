@@ -41,7 +41,20 @@ print(path)
 
 `generate()` returns a `GeneratedImages` object. Its `images` tuple contains image bytes and media types. For multiple outputs, request `n` if the model supports it, then call `result.save("second", index=1)`. You can also call `result.images[0].save("first")`.
 
-Model-specific parameters are passed through to OpenRouter. Consult each model's `supported_parameters`; provider-specific settings can be passed using `provider={"options": {"provider-slug": {...}}}`. Streaming is outside this first version.
+Model-specific parameters are passed through to OpenRouter. Consult each model's `supported_parameters`; provider-specific settings can be passed using `provider={"options": {"provider-slug": {...}}}`. For endpoints with native SSE, call `generator.generate(prompt, stream=True, on_event=callback)`. The callback receives event metadata without large base64 image data.
+
+## Interactive example
+
+```bash
+python -m pip install -e '.[demo]'
+python examples/interactive_generate.py
+```
+
+The example reads the ignored `.env` file automatically. It lists **all live image models**, showing input/output modalities and each provider's published pricing lines. Routes are sorted from low to high by their lowest published output rate. Rates may be per image, token, or megapixel, so this ordering is not an estimated total generation cost. A `FREE` label means **every published pricing line is zero**; it does not depend on a model name or API label.
+
+Enter a model number and prompt. The example then asks for supported parameters with their allowed values or ranges. When `webp` is supported, leaving `output_format` blank selects WebP. Otherwise it uses the provider default. If the chosen model needs a reference image, enter a local image path or URL. Images go into `generated/` with the correct extension.
+
+The chosen provider is pinned and fallback is disabled so pricing and capabilities match the displayed route. `tqdm` shows elapsed seconds; on SSE capable endpoints it also counts partial image events. OpenRouter does not publish a completion percentage for this operation, so the indicator cannot show an accurate percent. Currently, zero-price endpoints do not support SSE.
 
 ## Fetch current image models
 
