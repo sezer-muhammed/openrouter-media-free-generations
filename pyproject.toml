@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openrouter-media-free-generations"
+version = "0.1.0"
+description = "Small Python client for OpenRouter image generation and image model discovery"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "sezer-muhammed"}]
+keywords = ["openrouter", "images", "generation"]
+classifiers = ["Programming Language :: Python :: 3", "License :: OSI Approved :: MIT License"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
