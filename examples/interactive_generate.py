@@ -19,6 +19,18 @@ from openrouter_media_free_generations import ImageGenerator, ImageModelsList, O
 
 ROOT = Path(__file__).resolve().parents[1]
 
+PARAMETER_HELP = {
+    "aspect_ratio": "Image shape as width:height (4:3 is landscape; 3:4 is portrait)",
+    "n": "Number of images to request; each returned image may be billed",
+    "resolution": "Image resolution tier; higher resolution may cost more",
+    "size": "Image dimensions or a resolution tier, if supported",
+    "quality": "Output quality; higher quality may cost more",
+    "output_format": "Saved image file format",
+    "background": "Whether the background is transparent or opaque",
+    "output_compression": "JPEG/WebP compression level from 0 to 100",
+    "seed": "Random seed for repeatable results, when supported",
+}
+
 
 def load_local_env() -> None:
     """Read only the API key from the repository's ignored .env file."""
@@ -120,7 +132,7 @@ def reference_from_input(value: str) -> dict:
 def ask_references(descriptor: dict) -> list[dict]:
     minimum = int(descriptor.get("min", 0))
     maximum = int(descriptor.get("max", 1))
-    print(f"Reference images: {minimum}–{maximum}. Enter a local file path or HTTP(S) URL.")
+    print(f"Reference images (source images to guide or edit): {minimum}–{maximum}. Enter a local file path or HTTP(S) URL.")
     references = []
     while len(references) < maximum:
         required = len(references) < minimum
@@ -149,8 +161,9 @@ def ask_parameters(endpoint: dict) -> dict:
         else:
             hint = "JSON value, e.g. 42 or true"
         default = "webp" if name == "output_format" and "webp" in descriptor.get("values", []) else None
+        explanation = PARAMETER_HELP.get(name, "Model-specific setting")
         while True:
-            raw = input(f"{name} ({hint}; blank={'webp' if default else 'provider default'}): ").strip()
+            raw = input(f"{name} — {explanation} ({hint}; blank={'webp' if default else 'provider default'}): ").strip()
             if not raw:
                 if default:
                     result[name] = default
@@ -201,6 +214,23 @@ def generate_with_progress(generator: ImageGenerator, prompt: str, parameters: d
             ticker.join(timeout=2)
 
 
+def show_cost_preview(endpoint: dict | None, parameters: dict) -> None:
+    count = parameters.get("n", 1)
+    print(f"Requested images: up to {count}.")
+    if endpoint is None:
+        print("No published price is available for this model.")
+        return
+    if is_free(endpoint):
+        print("Published price for this route: $0.")
+        return
+    per_image = image_price(endpoint)
+    if per_image is not None:
+        print(f"Published output price: from ${per_image:g} per image; from ${per_image * count:g} if {count} images are returned.")
+        print("Input charges and higher resolution tiers may increase the actual cost.")
+    else:
+        print("This route is billed by tokens or megapixels; the final image cost is not known in advance.")
+
+
 def main() -> int:
     load_local_env()
     try:
@@ -210,6 +240,7 @@ def main() -> int:
             print("No image generation models are currently available.")
             return 1
         model, endpoint = ask_selection(options)
+        print(f"Selected: {model['id']} — {price_label(endpoint or {})}")
         prompt = input("Prompt: ").strip()
         if not prompt:
             print("Prompt cannot be empty.")
@@ -218,6 +249,7 @@ def main() -> int:
         if endpoint and endpoint.get("provider_tag"):
             # Pin the selected provider so pricing and capabilities match the displayed route.
             parameters["provider"] = {"only": [endpoint["provider_tag"]], "allow_fallbacks": False}
+        show_cost_preview(endpoint, parameters)
         streaming = bool(endpoint and endpoint.get("supports_streaming"))
         if not streaming:
             print("This endpoint does not support SSE; tqdm will show elapsed time.")
