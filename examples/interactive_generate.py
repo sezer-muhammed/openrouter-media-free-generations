@@ -42,17 +42,25 @@ def is_free(endpoint: dict) -> bool:
         return False
 
 
-def output_price(endpoint: dict) -> float:
-    """Lowest published output rate; units are displayed because they differ."""
-    prices = endpoint.get("pricing") or []
+def image_price(endpoint: dict) -> float | None:
+    """Lowest published price per output image, if the endpoint has one."""
     values = []
-    for line in prices:
-        if str(line.get("billable", "")).startswith("output_"):
+    for line in endpoint.get("pricing") or []:
+        if line.get("billable") == "output_image" and line.get("unit") == "image":
             try:
                 values.append(float(line["cost_usd"]))
             except (KeyError, TypeError, ValueError):
                 pass
-    return min(values, default=float("inf"))
+    return min(values) if values else None
+
+
+def price_sort_key(endpoint: dict) -> tuple[int, float]:
+    if is_free(endpoint):
+        return (0, 0)
+    price = image_price(endpoint)
+    if price is not None:
+        return (1, price)
+    return (2 if endpoint.get("pricing") else 3, float("inf"))
 
 
 def choices(models: list[dict]) -> list[tuple[dict, dict | None]]:
@@ -63,32 +71,30 @@ def choices(models: list[dict]) -> list[tuple[dict, dict | None]]:
             result.extend((model, endpoint) for endpoint in endpoints)
         else:
             result.append((model, None))
-    return sorted(result, key=lambda pair: (output_price(pair[1] or {}), pair[0]["id"], (pair[1] or {}).get("provider_tag") or ""))
+    return sorted(result, key=lambda pair: (price_sort_key(pair[1] or {}), pair[0]["id"], (pair[1] or {}).get("provider_tag") or ""))
 
 
-def format_prices(endpoint: dict) -> str:
-    prices = endpoint.get("pricing") or []
-    if not prices:
-        return "price unavailable"
-    return "; ".join(
-        f"{line.get('billable', '?')} ${float(line['cost_usd']):g}/{line.get('unit', '?')}"
-        + (f" ({line['variant']})" if line.get("variant") else "")
-        for line in prices
-    )
+def price_label(endpoint: dict) -> str:
+    if is_free(endpoint):
+        return "FREE ($0/image)"
+    price = image_price(endpoint)
+    if price is not None:
+        return f"from ${price:g}/image"
+    if endpoint.get("pricing"):
+        return "variable/image"
+    return "price unavailable"
 
 
 def ask_selection(options: list[tuple[dict, dict | None]]) -> tuple[dict, dict | None]:
-    print("\nImage generation models (live OpenRouter data):")
-    print("Sorted by lowest published output rate. Units differ; this is not an estimated total generation cost.\n")
+    streaming_count = sum(bool(endpoint and endpoint.get("supports_streaming")) for _, endpoint in options)
+    print(f"\nImage models — {len(options)} routes, {streaming_count} with SSE:")
     for number, (model, endpoint) in enumerate(options, 1):
         route = endpoint or {}
-        architecture = model.get("architecture") or {}
-        input_types = ",".join(architecture.get("input_modalities") or []) or "?"
-        output_types = ",".join(architecture.get("output_modalities") or []) or "?"
         provider = route.get("provider_tag") or "no endpoint"
-        label = "FREE | " if is_free(route) else ""
-        streaming = "SSE" if route.get("supports_streaming") else "no SSE"
-        print(f"{number:>2}. {model['id']} [{provider}] | input: {input_types} → output: {output_types} | {label}{format_prices(route)} | {streaming}")
+        streaming = " [SSE]" if route.get("supports_streaming") else ""
+        print(f"{number:>2}. {model['id']} [{provider}] — {price_label(route)}{streaming}")
+    print("Prices shown are the lowest published output price per image. Extra input charges or higher tiers may apply.")
+    print("'variable/image' means OpenRouter prices by tokens or megapixels; no fixed image price is published.")
     while True:
         selection = input("\nModel number (q to quit): ").strip().lower()
         if selection in {"q", "quit"}:

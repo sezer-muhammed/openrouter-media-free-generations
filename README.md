@@ -7,8 +7,12 @@ A small Python library for generating images through OpenRouter and discovering 
 ## Install
 
 ```bash
-python -m pip install -e .
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[demo]'
 ```
+
+On macOS/Homebrew Python, installing into the system interpreter may fail with `This environment is externally managed` (PEP 668). Use the virtual environment above; do not use `--break-system-packages`. Run the example with `.venv/bin/python examples/interactive_generate.py` if you have not activated the environment.
 
 Copy `.env.example` to `.env` and put your key there. `.env` is ignored by Git. The library reads `OPENROUTER_API_KEY` from the process environment, or you can pass `api_token` directly. For a local shell session:
 
@@ -46,11 +50,10 @@ Model-specific parameters are passed through to OpenRouter. Consult each model's
 ## Interactive example
 
 ```bash
-python -m pip install -e '.[demo]'
 python examples/interactive_generate.py
 ```
 
-The example reads the ignored `.env` file automatically. It lists **all live image models**, showing input/output modalities and each provider's published pricing lines. Routes are sorted from low to high by their lowest published output rate. Rates may be per image, token, or megapixel, so this ordering is not an estimated total generation cost. A `FREE` label means **every published pricing line is zero**; it does not depend on a model name or API label.
+The example reads the ignored `.env` file automatically. It lists **all live image models** with a short price label and marks SSE capable routes. Fixed per-image prices are sorted from low to high. Token or megapixel priced routes appear afterward as `variable/image`, since OpenRouter does not publish one fixed image cost for them. Routes without pricing appear last. A `FREE` label means **every published pricing line is zero**; it does not depend on a model name or API label. The listed price is a starting output price; extra input charges or higher resolution tiers may apply.
 
 Enter a model number and prompt. The example then asks for supported parameters with their allowed values or ranges. When `webp` is supported, leaving `output_format` blank selects WebP. Otherwise it uses the provider default. If the chosen model needs a reference image, enter a local image path or URL. Images go into `generated/` with the correct extension.
 
